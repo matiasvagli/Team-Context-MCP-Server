@@ -60,6 +60,34 @@ El sistema tiene dos partes que se complementan:
 
 Ambos comparten la misma DB local. No hay servidor externo, no hay cloud, no hay red.
 
+### Flujo de datos
+
+```
+ESCRITURA (CLI)                        LECTURA (MCP Server)
+
+ archivo .md / git log                  prompt del dev
+        │                                      │
+        ▼                                      ▼
+  .mcpignore check               Embedder.embed(prompt)
+  (¿ignorar?)                            │
+        │                                ▼
+        ▼                        sqlite-vec MATCH
+  sanitizer.redact()              top_k × 10 candidatos
+  (tokens, keys…)                        │
+        │                                ▼
+        ▼                     score = semantic×0.6
+  Embedder.embed()               + priority×0.25
+  (all-MiniLM-L6-v2)             + recency×0.15
+        │                        - deprecated×0.9
+        ▼                                │
+  VectorDB.insert()                      ▼
+  (documents + embeddings)   score < threshold → vacío
+                                         │
+                                         ▼
+                                  top_k resultados
+                                  → LLM context
+```
+
 ---
 
 ## Qué se indexa
@@ -110,6 +138,48 @@ En la próxima sesión, el servidor inyecta esos fragmentos automáticamente cua
 
 ---
 
+## Privacidad y filtros de seguridad
+
+El indexer aplica dos capas de protección antes de guardar cualquier contenido en la DB.
+
+### `.mcpignore` — excluir archivos y directorios
+
+Creá un `.mcpignore` en la raíz del proyecto con la misma sintaxis que `.gitignore`:
+
+```
+# .mcpignore
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials/
+node_modules/
+```
+
+Cualquier archivo que coincida con un patrón es ignorado completamente durante el indexado. El repo incluye un `.mcpignore` de ejemplo con defaults razonables.
+
+### Redacción automática de datos sensibles
+
+Antes de embeber cualquier contenido (archivos, commits, docs), el indexer aplica una lista de regex sobre el texto. Si detecta un patrón sensible, lo reemplaza con `[REDACTED]` antes de guardar en la DB.
+
+Patrones cubiertos:
+
+| Tipo | Ejemplo detectado |
+|------|-------------------|
+| Anthropic API key | `sk-ant-api03-...` |
+| OpenAI API key | `sk-...` |
+| GitHub token | `ghp_...`, `ghs_...` |
+| AWS access key | `AKIA...` |
+| Bearer token | `Bearer eyJ...` |
+| Private key block | `-----BEGIN PRIVATE KEY-----` |
+| Database URL con credenciales | `postgres://user:pass@host/db` |
+| Asignación genérica de secretos | `password = "abc123longvalue"` |
+
+El contenido almacenado en la DB nunca contiene el valor original — solo el marcador `[REDACTED]`. El embedding se genera sobre el texto ya redactado.
+
+---
+
 ## Invalidación de contexto (deprecation)
 
 Si una decisión de arquitectura quedó obsoleta, marcala como deprecated en el archivo correspondiente con frontmatter:
@@ -127,6 +197,16 @@ status: deprecated
 Al correr `team-mcp init`, el skill se re-indexa con una penalización fuerte de score (`× 0.1`). No desaparece — el LLM puede verlo si lo busca explícitamente — pero nunca va a ganarle a un resultado activo en el ranking normal.
 
 Esto resuelve el problema de que convivían contextos contradictorios (ej. "usar Redis" vs. "usar Valkey") sin que el LLM supiera cuál era vigente.
+
+**Ejemplo real:** el equipo tiene tres convenciones de logging acumuladas a lo largo del tiempo.
+
+```
+skills/logging-v1.md   → status: deprecated  → score: ~0.08
+skills/logging-v2.md   → status: deprecated  → score: ~0.09
+skills/logging-v3.md   → (activo)            → score: 0.87
+```
+
+Cuando el LLM recibe `"add logging to this service"`, el servidor devuelve `logging-v3.md` con score dominante. Las versiones anteriores existen en la DB pero nunca superan el threshold. El equipo no tuvo que borrar ni migrar nada — solo marcar el frontmatter.
 
 ---
 
@@ -267,6 +347,16 @@ team-mcp search "por qué sacamos Redis"
 
 ---
 
+## Decisiones de diseño
+
+**SQLite + sqlite-vec** — La alternativa obvia era Chroma o Qdrant. Se descartaron porque requieren un proceso servidor separado, añaden latencia de red y complican el setup en CI. SQLite es un archivo local: latencia cero, zero-config, portable entre máquinas con un `cp`.
+
+**all-MiniLM-L6-v2** — Modelos más grandes (e5-large, bge-large) tienen mejor recall pero requieren GPU o 3–4× más tiempo de CPU. `all-MiniLM-L6-v2` corre en 50–80ms por batch en cualquier laptop, produce vectores de 384 dimensiones con precisión suficiente para contexto técnico, y no levanta el ventilador. El tradeoff es correcto para este dominio.
+
+**Ranking híbrido en vez de solo similitud vectorial** — La similitud coseno sola tiene dos problemas conocidos: no distingue documentos populares de documentos relevantes, y trata igual a un doc de hace 3 años que uno de la semana pasada. El componente `recency` evita que decisiones obsoletas dominen el ranking. El componente `priority` permite que `docs/architecture.md` siempre aparezca aunque la similitud semántica no sea la más alta. Sin esto, el LLM recibiría contexto técnicamente correcto pero desactualizado.
+
+---
+
 ## Stack
 
 | Componente   | Tecnología                                               |
@@ -296,4 +386,4 @@ El sistema solo clasifica y routea. La generación queda a cargo de tu LLM.
 
 ## Status
 
-Work in progress. Built as a portfolio project to demonstrate practical use of embeddings, MCP, and developer tooling for AI workflows.
+Proyecto en desarrollo. Construido como portfolio para demostrar el uso práctico de embeddings, MCP y tooling para flujos de trabajo de IA.

@@ -1,0 +1,29 @@
+# .mcpignore — files and paths excluded from MCP indexing
+# Syntax: one glob pattern per line (same rules as .gitignore)
+# Lines starting with # are comments.
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Dependency directories
+node_modules/
+.venv/
+venv/
+__pycache__/
+
+# Build output
+dist/
+build/
+*.egg-info/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
