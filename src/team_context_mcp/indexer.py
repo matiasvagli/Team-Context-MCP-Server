@@ -28,6 +28,23 @@ def _read(path: Path) -> str:
         return ""
 
 
+def _parse_frontmatter(content: str) -> tuple[dict, str]:
+    """Extract YAML-like frontmatter from markdown. Returns (metadata, body)."""
+    if not content.startswith("---"):
+        return {}, content
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}, content
+    fm_str = content[3:end].strip()
+    body = content[end + 4:].strip()
+    meta: dict = {}
+    for line in fm_str.splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            meta[key.strip().lower()] = val.strip().lower()
+    return meta, body
+
+
 def _priority_for_path(path: Path, priority_files: list[str], project_root: Path) -> float:
     relative = str(path.relative_to(project_root))
     for pf in priority_files:
@@ -45,24 +62,29 @@ def index_skills(db: VectorDB, project: str, project_root: Path, config: dict):
     if not files:
         return 0
 
-    contents = [_read(f) for f in files]
-    contents = [(f, c) for f, c in zip(files, contents) if c]
+    raw_contents = [_read(f) for f in files]
+    parsed = [_parse_frontmatter(c) for c in raw_contents]
+    entries = [(f, meta, body) for f, (meta, body) in zip(files, parsed) if body]
 
-    embeddings = Embedder.embed_batch([c for _, c in contents])
+    embeddings = Embedder.embed_batch([body for _, _, body in entries])
 
     priority_files = config.get("priority_files", [])
-    for (filepath, content), embedding in zip(contents, embeddings):
+    for (filepath, meta, body), embedding in zip(entries, embeddings):
+        source_path = str(filepath.relative_to(project_root))
         prio = _priority_for_path(filepath, priority_files, project_root)
+        deprecated = meta.get("status") == "deprecated"
+        db.delete_by_source(project, source_path)
         db.insert(
             project=project,
             doc_type="skill",
-            content=content,
+            content=body,
             embedding=embedding,
-            source_path=str(filepath.relative_to(project_root)),
+            source_path=source_path,
             priority=prio,
+            deprecated=deprecated,
         )
 
-    return len(contents)
+    return len(entries)
 
 
 def index_team_memory(db: VectorDB, project: str, project_root: Path, config: dict):
@@ -74,24 +96,29 @@ def index_team_memory(db: VectorDB, project: str, project_root: Path, config: di
     if not files:
         return 0
 
-    contents = [(f, _read(f)) for f in files]
-    contents = [(f, c) for f, c in contents if c]
+    raw_contents = [_read(f) for f in files]
+    parsed = [_parse_frontmatter(c) for c in raw_contents]
+    entries = [(f, meta, body) for f, (meta, body) in zip(files, parsed) if body]
 
-    embeddings = Embedder.embed_batch([c for _, c in contents])
+    embeddings = Embedder.embed_batch([body for _, _, body in entries])
 
     priority_files = config.get("priority_files", [])
-    for (filepath, content), embedding in zip(contents, embeddings):
+    for (filepath, meta, body), embedding in zip(entries, embeddings):
+        source_path = str(filepath.relative_to(project_root))
         prio = _priority_for_path(filepath, priority_files, project_root)
+        deprecated = meta.get("status") == "deprecated"
+        db.delete_by_source(project, source_path)
         db.insert(
             project=project,
             doc_type="memory",
-            content=content,
+            content=body,
             embedding=embedding,
-            source_path=str(filepath.relative_to(project_root)),
+            source_path=source_path,
             priority=prio,
+            deprecated=deprecated,
         )
 
-    return len(contents)
+    return len(entries)
 
 
 def index_docs(db: VectorDB, project: str, project_root: Path, config: dict):
@@ -108,24 +135,29 @@ def index_docs(db: VectorDB, project: str, project_root: Path, config: dict):
     if not targets:
         return 0
 
-    contents = [(f, _read(f)) for f in targets]
-    contents = [(f, c) for f, c in contents if c]
+    raw_contents = [_read(f) for f in targets]
+    parsed = [_parse_frontmatter(c) for c in raw_contents]
+    entries = [(f, meta, body) for f, (meta, body) in zip(targets, parsed) if body]
 
-    embeddings = Embedder.embed_batch([c for _, c in contents])
+    embeddings = Embedder.embed_batch([body for _, _, body in entries])
     priority_files = config.get("priority_files", [])
 
-    for (filepath, content), embedding in zip(contents, embeddings):
+    for (filepath, meta, body), embedding in zip(entries, embeddings):
+        source_path = str(filepath.relative_to(project_root))
         prio = _priority_for_path(filepath, priority_files, project_root)
+        deprecated = meta.get("status") == "deprecated"
+        db.delete_by_source(project, source_path)
         db.insert(
             project=project,
             doc_type="doc",
-            content=content,
+            content=body,
             embedding=embedding,
-            source_path=str(filepath.relative_to(project_root)),
+            source_path=source_path,
             priority=prio,
+            deprecated=deprecated,
         )
 
-    return len(contents)
+    return len(entries)
 
 
 def index_prs_from_git(db: VectorDB, project: str, project_root: Path, limit: int = 50):
@@ -155,13 +187,15 @@ def index_prs_from_git(db: VectorDB, project: str, project_root: Path, limit: in
         files_str = "\n".join(f"  - {p}" for p in changed[:20])
         content = f"Commit: {message}\nFiles changed:\n{files_str}" if files_str else f"Commit: {message}"
 
+        source_path = f"git:{commit.hexsha[:8]}"
         embedding = Embedder.embed(content)
+        db.delete_by_source(project, source_path)
         db.insert(
             project=project,
             doc_type="pr",
             content=content,
             embedding=embedding,
-            source_path=f"git:{commit.hexsha[:8]}",
+            source_path=source_path,
             priority=0.7,
             date=float(commit.committed_date),
         )

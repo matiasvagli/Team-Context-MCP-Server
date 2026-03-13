@@ -42,7 +42,8 @@ class VectorDB:
                 content     TEXT NOT NULL,
                 source_path TEXT,
                 date        REAL DEFAULT (unixepoch()),
-                priority    REAL DEFAULT 0.5
+                priority    REAL DEFAULT 0.5,
+                deprecated  INTEGER DEFAULT 0
             );
 
             CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
@@ -50,7 +51,30 @@ class VectorDB:
                 embedding float[{self.DIM}]
             );
         """)
+        # Migration: add deprecated column to existing DBs
+        try:
+            self.conn.execute("ALTER TABLE documents ADD COLUMN deprecated INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         self.conn.commit()
+
+    def delete_by_source(self, project: str, source_path: str) -> int:
+        """Delete all documents for a project+source_path. Used for upsert semantics."""
+        rows = self.conn.execute(
+            "SELECT id FROM documents WHERE project = ? AND source_path = ?",
+            (project, source_path),
+        ).fetchall()
+        if not rows:
+            return 0
+        ids = [r[0] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        self.conn.execute(f"DELETE FROM embeddings WHERE doc_id IN ({placeholders})", ids)
+        self.conn.execute(
+            "DELETE FROM documents WHERE project = ? AND source_path = ?",
+            (project, source_path),
+        )
+        self.conn.commit()
+        return len(ids)
 
     def insert(
         self,
@@ -61,11 +85,12 @@ class VectorDB:
         source_path: str = "",
         priority: float = 0.5,
         date: Optional[float] = None,
+        deprecated: bool = False,
     ) -> int:
         ts = date if date is not None else time.time()
         cur = self.conn.execute(
-            "INSERT INTO documents (project, type, content, source_path, date, priority) VALUES (?,?,?,?,?,?)",
-            (project, doc_type, content, source_path, ts, priority),
+            "INSERT INTO documents (project, type, content, source_path, date, priority, deprecated) VALUES (?,?,?,?,?,?,?)",
+            (project, doc_type, content, source_path, ts, priority, int(deprecated)),
         )
         doc_id = cur.lastrowid
         self.conn.execute(
@@ -101,7 +126,8 @@ class VectorDB:
                 d.source_path,
                 d.date,
                 d.priority,
-                e.distance
+                e.distance,
+                d.deprecated
             FROM embeddings e
             JOIN documents d ON e.doc_id = d.id
             WHERE e.embedding MATCH ?
@@ -130,10 +156,12 @@ class VectorDB:
 
         results = []
         for row in rows:
-            doc_id, doc_type_, content, source_path, date, priority, distance = row
+            doc_id, doc_type_, content, source_path, date, priority, distance, deprecated = row
             semantic = 1.0 - (distance - min_d) / range_d
             recency = (date - min_t) / range_t
             score = (semantic * 0.6) + (priority * 0.25) + (recency * 0.15)
+            if deprecated:
+                score *= 0.1
             results.append(
                 {
                     "id": doc_id,
@@ -142,6 +170,7 @@ class VectorDB:
                     "source_path": source_path,
                     "score": round(score, 4),
                     "semantic_similarity": round(semantic, 4),
+                    "deprecated": bool(deprecated),
                 }
             )
 

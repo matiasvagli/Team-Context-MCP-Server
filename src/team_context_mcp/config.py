@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "team_dir": "team",
     "db_path": ".mcp/context.db",
     "top_k": 5,
+    "similarity_threshold": 0.35,
 }
 
 

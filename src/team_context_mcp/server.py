@@ -56,6 +56,17 @@ def _detect_project() -> str:
         return Path.cwd().name
 
 
+def _project_root() -> Path:
+    """Return the git repo root, or cwd as fallback."""
+    try:
+        import git
+
+        repo = git.Repo(search_parent_directories=True)
+        return Path(repo.working_dir)
+    except Exception:
+        return Path.cwd()
+
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 
@@ -72,13 +83,18 @@ def get_context(prompt: str, project: str = "") -> str:
     if not project:
         project = _detect_project()
 
+    config = load_config(_project_root())
+    threshold = config.get("similarity_threshold", 0.35)
+
     db = _get_db(project)
     embedding = Embedder.embed(prompt)
     results = db.search(embedding, project=project, top_k=5)
     db.close()
 
+    results = [r for r in results if r["score"] >= threshold]
+
     if not results:
-        return f"No context found for project '{project}'. Run `team-mcp init` first."
+        return f"No relevant context found for project '{project}' (score below threshold {threshold})."
 
     lines = [f"# Team context for: {project}\n"]
     for r in results:

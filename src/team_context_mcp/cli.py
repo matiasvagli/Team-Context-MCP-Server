@@ -4,6 +4,7 @@ CLI for Team Context MCP Server.
 Commands:
   team-mcp init          Scan the repo and index everything into the DB
   team-mcp index-prs     Index git commit history as PR context
+  team-mcp add-memory    Save a one-off memory string into the vector DB
   team-mcp search        Quick search from the terminal (dev tool)
   team-mcp status        Show what's indexed for the current project
   team-mcp serve         Start the MCP server
@@ -140,6 +141,38 @@ def index_prs(project: str, root: str, limit: int):
     db.close()
 
     console.print(f"[green]Done![/green] {n} commits indexed.")
+
+
+# ── add-memory ────────────────────────────────────────────────────────────────
+
+
+@cli.command("add-memory")
+@click.argument("text")
+@click.option("--project", "-p", default="", help="Project name (auto-detected from git)")
+def add_memory(text: str, project: str):
+    """Save a one-off memory string into the vector DB."""
+    import time
+    from team_context_mcp.embedder import Embedder
+
+    project_root = _project_root()
+    if not project:
+        project = _detect_project(project_root)
+
+    db = _get_db(project)
+    embedding = Embedder.embed(text)
+    db.insert(
+        project,
+        doc_type="memory",
+        content=text,
+        embedding=embedding,
+        source_path="session",
+        priority=0.85,
+        date=time.time(),
+    )
+    db.close()
+
+    preview = text[:60]
+    console.print(f'[green]✓ Memory saved:[/green] "{preview}"')
 
 
 # ── search ────────────────────────────────────────────────────────────────────
