@@ -1,0 +1,9 @@
+.mcp/
+*.db
+__pycache__/
+*.pyc
+.env
+dist/
+*.egg-info/
+.venv/
+venv/

@@ -1,0 +1,11 @@
+{
+  "priority_files": [
+    "docs/architecture.md",
+    "team/context.md",
+    "src/domain/"
+  ],
+  "skills_dir": "skills",
+  "team_dir": "team",
+  "db_path": ".mcp/context.db",
+  "top_k": 5
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "team-context": {
+      "command": "team-mcp",
+      "args": ["serve"],
+      "env": {
+        "TEAM_MCP_DB_DIR": "${HOME}/.team-mcp"
+      }
+    }
+  }
+}
