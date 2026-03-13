@@ -18,6 +18,28 @@ Un servidor MCP que inyecta silenciosamente el contexto relevante antes de cada 
 
 El dev escribe su prompt normalmente. El servidor encuentra qué es relevante — skills, decisiones de arquitectura, PRs pasados — y lo agrega al contexto. El LLM responde como si conociera el proyecto.
 
+### Sistema híbrido: DB local + LLM de turno
+
+Este proyecto **no llama a ninguna API de LLM**. No tiene `OPENAI_API_KEY`, no hace requests a Anthropic, no genera texto.
+
+Lo que hace es distinto: mantiene una base de conocimiento local (SQLite + embeddings) y la expone vía protocolo MCP. El LLM que estés usando — Claude, GPT-4, Gemini, el modelo local que corre en Ollama — lee ese contexto a través del protocolo estándar antes de generar su respuesta.
+
+```
+Tu LLM favorito
+      │
+      │ "necesito contexto para este prompt"
+      ▼
+  MCP Server  ←── lee ──→  ~/.team-mcp/proyecto.db
+      │                     (embeddings locales,
+      │                      sin cloud, sin API key)
+      │
+      │ "acá tenés los 5 fragmentos más relevantes"
+      ▼
+Tu LLM favorito genera la respuesta
+```
+
+**El sistema es agnóstico al LLM.** Funciona igual con Claude Code, Cursor, GitHub Copilot o cualquier cliente que soporte MCP. Cambiar de proveedor de LLM no requiere ningún cambio en el servidor ni en el índice.
+
 ---
 
 ## Arquitectura: dos componentes
