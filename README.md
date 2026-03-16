@@ -331,6 +331,11 @@ team-mcp search "query"              # Busca en el índice desde la terminal
 team-mcp search "query" --type skill # Filtra por tipo: skill | memory | pr | doc
 team-mcp status                      # Muestra cuántos documentos hay indexados por tipo
 
+# Gestión de proyectos
+team-mcp projects                    # Lista todos los proyectos indexados en ~/.team-mcp/
+team-mcp delete-project <nombre>     # Borra el índice de un proyecto (pide confirmación)
+team-mcp delete-project <nombre> -y  # Borra sin confirmación
+
 # Servidor
 team-mcp serve                       # Arranca el servidor MCP (para el cliente LLM)
 ```

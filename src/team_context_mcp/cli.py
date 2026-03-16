@@ -2,12 +2,14 @@
 CLI for Team Context MCP Server.
 
 Commands:
-  team-mcp init          Scan the repo and index everything into the DB
-  team-mcp index-prs     Index git commit history as PR context
-  team-mcp add-memory    Save a one-off memory string into the vector DB
-  team-mcp search        Quick search from the terminal (dev tool)
-  team-mcp status        Show what's indexed for the current project
-  team-mcp serve         Start the MCP server
+  team-mcp init             Scan the repo and index everything into the DB
+  team-mcp index-prs        Index git commit history as PR context
+  team-mcp add-memory       Save a one-off memory string into the vector DB
+  team-mcp search           Quick search from the terminal (dev tool)
+  team-mcp status           Show what's indexed for the current project
+  team-mcp projects         List all indexed projects in ~/.team-mcp/
+  team-mcp delete-project   Delete all indexed data for a project
+  team-mcp serve            Start the MCP server
 """
 
 from __future__ import annotations
@@ -251,6 +253,59 @@ def status(project: str):
         total += count
     table.add_row("[bold]Total[/bold]", f"[bold]{total}[/bold]")
     console.print(table)
+
+
+# ── projects ──────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+def projects():
+    """List all indexed projects in ~/.team-mcp/."""
+    db_dir = Path(os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp")))
+
+    if not db_dir.exists():
+        console.print("[yellow]No projects indexed yet.[/yellow]")
+        return
+
+    dbs = sorted(db_dir.glob("*.db"))
+    if not dbs:
+        console.print("[yellow]No projects indexed yet.[/yellow]")
+        return
+
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Project", style="green")
+    table.add_column("Size", justify="right")
+    table.add_column("Path", style="dim")
+
+    for db_path in dbs:
+        name = db_path.stem
+        size_kb = db_path.stat().st_size // 1024
+        table.add_row(name, f"{size_kb} KB", str(db_path))
+
+    console.print(f"\n[bold cyan]Indexed projects[/bold cyan] in {db_dir}\n")
+    console.print(table)
+
+
+# ── delete-project ─────────────────────────────────────────────────────────────
+
+
+@cli.command("delete-project")
+@click.argument("project")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def delete_project(project: str, yes: bool):
+    """Delete all indexed data for a project."""
+    db_dir = Path(os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp")))
+    db_path = db_dir / f"{project}.db"
+
+    if not db_path.exists():
+        console.print(f"[red]Project '{project}' not found.[/red]")
+        return
+
+    if not yes:
+        click.confirm(f"Delete all indexed data for '{project}'?", abort=True)
+
+    db_path.unlink()
+    console.print(f"[green]✓ Project '{project}' deleted.[/green]")
 
 
 # ── serve ─────────────────────────────────────────────────────────────────────
