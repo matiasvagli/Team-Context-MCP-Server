@@ -261,7 +261,8 @@ def serve():
     """Start the MCP server (stdio transport for Claude/Cursor integration)."""
     from team_context_mcp.server import run
 
-    console.print("[bold cyan]Starting Team Context MCP server...[/bold cyan]")
+    import sys
+    print("Starting Team Context MCP server...", file=sys.stderr)
     run()
 
 

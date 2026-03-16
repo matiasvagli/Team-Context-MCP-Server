@@ -127,6 +127,14 @@ skills/
    add-event-handler.md
 ```
 
+El path es configurable en `mcp.config.json` con `skills_dir`. Si tus skills están en otra ubicación (por ejemplo `.agents/skills/` o `docs/prompts/`), actualizá ese campo antes de correr `team-mcp init`:
+
+```json
+{
+  "skills_dir": ".agents/skills"
+}
+```
+
 En vez de cargar 40 tools en cada contexto, el servidor carga las 3–5 que son realmente relevantes para el prompt actual.
 
 ### Team Knowledge Memory
@@ -331,15 +339,37 @@ team-mcp serve                       # Arranca el servidor MCP (para el cliente 
 
 ---
 
-## Integración con Claude Desktop / Claude Code
+## Integración con clientes MCP
 
-Copiá el contenido de `claude_mcp_config.json` a tu config de Claude:
+El repositorio incluye un `.mcp.json` listo para usar. Cualquier cliente compatible (Claude Code, Cursor, Windsurf, Antigravity, etc.) que abra este workspace lo detecta automáticamente.
 
-```bash
-# Linux / Mac
-cp claude_mcp_config.json ~/.config/claude/claude_desktop_config.json
-# Reiniciar Claude Desktop
+```json
+{
+  "mcpServers": {
+    "team-context": {
+      "command": "team-mcp",
+      "args": ["serve"],
+      "type": "stdio"
+    }
+  }
+}
 ```
+
+> **Importante:** El `.mcp.json` asume que `team-mcp` está en tu `$PATH` (instalado con `pipx`). Si el cliente no lo encuentra, usá la ruta absoluta:
+> ```json
+> "command": "/home/tu-usuario/.local/bin/team-mcp"
+> ```
+> Para saber la ruta exacta en tu máquina: `which team-mcp`
+
+Cada cliente MCP tiene su propio archivo de configuración global:
+
+| Cliente | Config global |
+|---------|--------------|
+| Claude Code | `~/.claude.json` |
+| Claude Desktop | `~/.config/claude/claude_desktop_config.json` |
+| Cursor / Windsurf | Settings UI del editor |
+
+El servidor arranca automáticamente en background cuando el cliente lee el `.mcp.json` — no es necesario correr `team-mcp serve` a mano.
 
 Claude va a llamar `get_context` automáticamente cada vez que trabajes en el proyecto.
 

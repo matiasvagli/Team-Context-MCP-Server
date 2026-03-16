@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "team-context": {
+      "command": "team-mcp",
+      "args": ["serve"],
+      "type": "stdio"
+    }
+  }
+}
