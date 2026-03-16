@@ -40,6 +40,8 @@ Tu LLM favorito genera la respuesta
 
 **El sistema es agnóstico al LLM.** Funciona igual con Claude Code, Cursor, GitHub Copilot o cualquier cliente que soporte MCP. Cambiar de proveedor de LLM no requiere ningún cambio en el servidor ni en el índice.
 
+**¿Por qué esta separación?** Porque el conocimiento del equipo es tuyo — no debería vivir en la nube ni quedar atado a un proveedor. El MCP Server indexa, rankea y filtra localmente usando el modelo de embeddings CPU-only. El LLM externo solo recibe el texto ya procesado: fragmentos limpios y relevantes. Si mañana cambiás de Claude a GPT-5, o a un modelo local en Ollama, el índice y toda la base de conocimiento siguen intactos. Zero lock-in.
+
 ---
 
 ## Arquitectura: dos componentes
@@ -286,17 +288,20 @@ Una sola DB local (`~/.team-mcp/`), con un archivo por proyecto. El nombre se de
 git clone https://github.com/tu-usuario/Team-Context-MCP-Server
 cd Team-Context-MCP-Server
 
-# Instalar (CPU-only, funciona en cualquier máquina)
+# Instalar dependencias (CPU-only, funciona en cualquier máquina)
 ./install.sh
+```
 
-# Activar el entorno
-source .venv/bin/activate
+`install.sh` instala PyTorch CPU-only y el paquete en modo editable. Después de esto, el comando `team-mcp` queda disponible **globalmente en tu terminal** — no necesitás activar ningún entorno ni estar en el directorio del repo.
 
-# Ir a tu proyecto e indexar
-cd tu-proyecto
+```bash
+# Usalo desde cualquier proyecto, en cualquier terminal
+cd ~/trabajo/mi-api
 team-mcp init
 team-mcp index-prs
 ```
+
+> Si preferís un entorno aislado: `pipx install -e /ruta/a/Team-Context-MCP-Server` después de correr `install.sh` para torch.
 
 ---
 
