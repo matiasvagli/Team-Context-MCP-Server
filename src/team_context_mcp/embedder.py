@@ -17,6 +17,17 @@ class Embedder:
     @classmethod
     def _get_model(cls):
         if cls._model is None:
+            import logging
+            import os
+
+            # Silenciar los logs HTTP de HuggingFace Hub — el modelo ya está cacheado
+            os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+            logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+            logging.getLogger("transformers").setLevel(logging.ERROR)
+            logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+            logging.getLogger("httpx").setLevel(logging.ERROR)
+            logging.getLogger("httpcore").setLevel(logging.ERROR)
+
             from sentence_transformers import SentenceTransformer  # lazy import
 
             cls._model = SentenceTransformer(MODEL_NAME, device="cpu")

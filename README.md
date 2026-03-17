@@ -494,6 +494,25 @@ query_debug_history("race condition en payment worker")
 
 Devuelve los bugs históricos más similares con problema, solución y link al PR original. El LLM recibe contexto concreto en vez de tener que googlear o preguntar al equipo.
 
+### Limitación actual: modo reactivo
+
+Hoy `query_debug_history` es un tool MCP que el LLM **puede** llamar solo cuando detecta que es relevante (funciona bien en Claude Code / Cursor). Pero no hay inyección automática — si el LLM no decide llamarlo, el contexto no aparece.
+
+### Próximo paso: inyección proactiva
+
+La mejora pendiente es que el servidor detecte patrones de error en el contexto entrante y llame `query_debug_history` automáticamente, sin que el LLM tenga que decidirlo. Algo así:
+
+```
+Dev abre un archivo con un stack trace
+  → servidor detecta el patrón de error
+  → busca en debug-memory antes de responder
+  → inyecta el contexto relevante automáticamente
+```
+
+Esto requiere hooks en el servidor MCP para interceptar el contexto antes de cada llamada, lo que es técnicamente posible con FastMCP pero está fuera del scope del MVP.
+
+**Por qué vale la pena:** hoy el LLM necesita "darse cuenta" de que el tool existe y es relevante. Con inyección proactiva, el contexto histórico siempre está disponible sin depender de que el LLM lo decida.
+
 ### Demo
 
 ```
