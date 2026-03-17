@@ -191,6 +191,11 @@ def index_prs_from_git(db: VectorDB, project: str, project_root: Path, limit: in
     except Exception:
         return 0
 
+    try:
+        _ = repo.head.commit
+    except ValueError:
+        return 0  # repo has no commits yet
+
     indexed = 0
     for commit in repo.iter_commits(max_count=limit):
         message = commit.message.strip()
