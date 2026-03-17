@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from .db import VectorDB
 from .embedder import Embedder
 from .config import load_config
+from .debug_memory import DebugMemoryDB
 
 # ── Server init ──────────────────────────────────────────────────────────────
 
@@ -40,6 +41,13 @@ def _get_db(project: str) -> VectorDB:
     db_dir = os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp"))
     db_path = Path(db_dir) / f"{project}.db"
     return VectorDB(db_path)
+
+
+def _get_debug_db() -> DebugMemoryDB:
+    """Resolve path for the shared cross-project debug memory DB."""
+    db_dir = os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp"))
+    db_path = Path(db_dir) / "debug-memory.db"
+    return DebugMemoryDB(db_path)
 
 
 def _detect_project() -> str:
@@ -171,6 +179,51 @@ def add_memory(content: str, project: str = "", priority: float = 0.7) -> str:
     db.close()
 
     return f"Memory stored (id={doc_id}) for project '{project}'."
+
+
+@mcp.tool()
+def query_debug_history(query: str, limit: int = 5) -> str:
+    """
+    Search the cross-project debug history for bugs similar to the current problem.
+
+    Args:
+        query: Description of the current bug or problem.
+        limit: Number of similar past bugs to return (default 5).
+
+    Returns:
+        Ranked list of historical bug fixes with problem description, solution,
+        source URL, and similarity score.
+    """
+    db = _get_debug_db()
+    total = db.total_count()
+    if total == 0:
+        db.close()
+        return (
+            "Debug memory is empty. Run `team-mcp debug-scrape` first to index "
+            "bug fix history from GitHub."
+        )
+
+    embedding = Embedder.embed(query)
+    results = db.search(embedding, top_k=limit)
+    db.close()
+
+    if not results:
+        return "No similar bugs found in debug history."
+
+    lines = [f"# Debug history — top {len(results)} similar bugs\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"## {i}. [{r['repo']}] {r['title']}")
+        lines.append(f"**Similarity:** {r['similarity_score']:.2f}  |  **Date:** {r['date']}  |  **Author:** {r['author']}")
+        lines.append(f"**URL:** {r['url']}")
+        if r["problem"]:
+            lines.append(f"\n**Problem:** {r['problem']}")
+        if r["solution"]:
+            lines.append(f"\n**Solution:** {r['solution']}")
+        if r["labels"]:
+            lines.append(f"\n**Labels:** {', '.join(r['labels'])}")
+        lines.append("\n---")
+
+    return "\n".join(lines)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

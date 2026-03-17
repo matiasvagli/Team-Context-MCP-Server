@@ -446,6 +446,68 @@ El sistema solo clasifica y routea. La generación queda a cargo de tu LLM.
 
 ---
 
+## Debug Memory — historia cross-proyecto de bugs (rama en desarrollo)
+
+> **Branch activo:** `feature/debug-memory` — feature en progreso, no mergeada a `main` todavía.
+
+La rama agrega un sistema de memoria histórica de bugs que **vive separado de los proyectos**. El problema que resuelve: cuando un dev se va del equipo, el conocimiento de cómo se resolvieron bugs críticos se pierde. Esta feature lo preserva y lo hace queryable.
+
+### Cómo funciona
+
+Se scrapeaan PRs cerrados/mergeados con labels de bug de repos de GitHub y se guardan en una DB separada:
+
+```
+~/.team-mcp/
+├── mi-api.db          ← contexto del proyecto (como antes)
+├── otro-proyecto.db   ← contexto del proyecto (como antes)
+└── debug-memory.db    ← cross-proyecto, siempre disponible ← NUEVO
+```
+
+La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, `debug-query` siempre accede a la misma base de conocimiento histórica.
+
+### Flujo de uso
+
+```bash
+# 1. Scrapear repos (requiere GITHUB_TOKEN para buena rate limit)
+export GITHUB_TOKEN=ghp_...
+team-mcp debug-scrape --repo tiangolo/fastapi --repo pallets/flask --max-prs 50
+
+# 2. Generar embeddings para los eventos scrapeados
+team-mcp debug-embed
+
+# 3. Consultar desde la terminal
+team-mcp debug-query "race condition async worker"
+
+# 4. Ver stats
+team-mcp debug-stats
+```
+
+Sin `GITHUB_TOKEN` funciona igual pero con límite de 60 requests/hora de la API pública de GitHub.
+
+### Nueva tool MCP: `query_debug_history`
+
+Una vez que la DB tiene datos, el LLM puede consultarla directamente:
+
+```
+query_debug_history("race condition en payment worker")
+```
+
+Devuelve los bugs históricos más similares con problema, solución y link al PR original. El LLM recibe contexto concreto en vez de tener que googlear o preguntar al equipo.
+
+### Demo
+
+```
+Dev: "tenemos un race condition en el worker de pagos"
+
+LLM (via query_debug_history): "Hace 8 meses tuvimos algo similar en el worker
+de notificaciones. Lo resolvimos agregando distributed locks con Redis.
+Acá está el PR con la implementación completa: github.com/org/repo/pull/234"
+```
+
+Ese conocimiento habría desaparecido cuando el dev original se fue. Ahora está indexado.
+
+---
+
 ## Status
 
 Proyecto en desarrollo. Construido como portfolio para demostrar el uso práctico de embeddings, MCP y tooling para flujos de trabajo de IA.
