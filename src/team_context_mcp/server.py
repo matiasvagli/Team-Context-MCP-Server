@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from .db import VectorDB
 from .embedder import Embedder
 from .config import load_config
+from .debug_memory import DebugMemoryDB
 
 # ── Server init ──────────────────────────────────────────────────────────────
 
@@ -40,6 +41,13 @@ def _get_db(project: str) -> VectorDB:
     db_dir = os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp"))
     db_path = Path(db_dir) / f"{project}.db"
     return VectorDB(db_path)
+
+
+def _get_debug_db() -> DebugMemoryDB:
+    """Resolve path for the shared cross-project debug memory DB."""
+    db_dir = os.environ.get("TEAM_MCP_DB_DIR", str(Path.home() / ".team-mcp"))
+    db_path = Path(db_dir) / "debug-memory.db"
+    return DebugMemoryDB(db_path)
 
 
 def _detect_project() -> str:
@@ -67,6 +75,18 @@ def _project_root() -> Path:
         return Path.cwd()
 
 
+_ERROR_PATTERNS = [
+    "error", "exception", "traceback", "bug", "fix", "broken",
+    "fails", "crash", "panic", "fatal", "undefined", "null pointer",
+    "race condition", "timeout", "deadlock",
+]
+
+
+def _looks_like_error(text: str) -> bool:
+    lower = text.lower()
+    return any(p in lower for p in _ERROR_PATTERNS)
+
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 
@@ -75,6 +95,7 @@ def get_context(prompt: str, project: str = "") -> str:
     """
     Returns the most relevant team context for a given prompt.
     Searches skills, team memory, and PR history, ranked by relevance.
+    If the prompt looks like a bug or error, also searches debug history automatically.
 
     Args:
         prompt:  The developer's current task or question.
@@ -93,21 +114,43 @@ def get_context(prompt: str, project: str = "") -> str:
 
     results = [r for r in results if r["score"] >= threshold]
 
-    if not results:
-        return f"No relevant context found for project '{project}' (score below threshold {threshold})."
+    lines = []
 
-    lines = [f"# Team context for: {project}\n"]
-    for r in results:
-        label = f"[{r['type']}]".ljust(10)
-        source = f"  ({r['source_path']})" if r["source_path"] else ""
-        lines.append(f"{label} relevance: {r['semantic_similarity']:.2f}{source}")
-        lines.append("")
-        # Truncate long content to avoid blowing context window
-        content = r["content"]
-        if len(content) > 1500:
-            content = content[:1500] + "\n... [truncated]"
-        lines.append(content)
-        lines.append("\n---")
+    if results:
+        lines.append(f"# Team context for: {project}\n")
+        for r in results:
+            label = f"[{r['type']}]".ljust(10)
+            source = f"  ({r['source_path']})" if r["source_path"] else ""
+            lines.append(f"{label} relevance: {r['semantic_similarity']:.2f}{source}")
+            lines.append("")
+            content = r["content"]
+            if len(content) > 1500:
+                content = content[:1500] + "\n... [truncated]"
+            lines.append(content)
+            lines.append("\n---")
+
+    # Proactive debug history injection — runs automatically when prompt looks like a bug
+    if _looks_like_error(prompt):
+        debug_db = _get_debug_db()
+        if debug_db.total_count() > 0:
+            debug_embedding = Embedder.embed(prompt)
+            debug_results = debug_db.search(debug_embedding, top_k=3)
+            debug_db.close()
+            if debug_results:
+                lines.append("\n# Debug history — similar past bugs\n")
+                for r in debug_results:
+                    lines.append(f"**[{r['repo']}]** {r['title']}  |  score: {r['similarity_score']:.2f}  |  {r['date']}")
+                    lines.append(f"URL: {r['url']}")
+                    if r["problem"]:
+                        lines.append(f"Problem: {r['problem'][:500]}")
+                    if r["solution"]:
+                        lines.append(f"Solution: {r['solution'][:500]}")
+                    lines.append("---")
+        else:
+            debug_db.close()
+
+    if not lines:
+        return f"No relevant context found for project '{project}' (score below threshold {threshold})."
 
     return "\n".join(lines)
 
@@ -171,6 +214,51 @@ def add_memory(content: str, project: str = "", priority: float = 0.7) -> str:
     db.close()
 
     return f"Memory stored (id={doc_id}) for project '{project}'."
+
+
+@mcp.tool()
+def query_debug_history(query: str, limit: int = 5) -> str:
+    """
+    Search the cross-project debug history for bugs similar to the current problem.
+
+    Args:
+        query: Description of the current bug or problem.
+        limit: Number of similar past bugs to return (default 5).
+
+    Returns:
+        Ranked list of historical bug fixes with problem description, solution,
+        source URL, and similarity score.
+    """
+    db = _get_debug_db()
+    total = db.total_count()
+    if total == 0:
+        db.close()
+        return (
+            "Debug memory is empty. Run `team-mcp debug-scrape` first to index "
+            "bug fix history from GitHub."
+        )
+
+    embedding = Embedder.embed(query)
+    results = db.search(embedding, top_k=limit)
+    db.close()
+
+    if not results:
+        return "No similar bugs found in debug history."
+
+    lines = [f"# Debug history — top {len(results)} similar bugs\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"## {i}. [{r['repo']}] {r['title']}")
+        lines.append(f"**Similarity:** {r['similarity_score']:.2f}  |  **Date:** {r['date']}  |  **Author:** {r['author']}")
+        lines.append(f"**URL:** {r['url']}")
+        if r["problem"]:
+            lines.append(f"\n**Problem:** {r['problem']}")
+        if r["solution"]:
+            lines.append(f"\n**Solution:** {r['solution']}")
+        if r["labels"]:
+            lines.append(f"\n**Labels:** {', '.join(r['labels'])}")
+        lines.append("\n---")
+
+    return "\n".join(lines)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

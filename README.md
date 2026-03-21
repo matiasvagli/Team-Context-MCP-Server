@@ -446,6 +446,93 @@ El sistema solo clasifica y routea. La generación queda a cargo de tu LLM.
 
 ---
 
+## Debug Memory — historia cross-proyecto de bugs (rama en desarrollo)
+
+> **Branch activo:** `feature/debug-memory` — feature en progreso, no mergeada a `main` todavía.
+
+La rama agrega un sistema de memoria histórica de bugs que **vive separado de los proyectos**. El problema que resuelve: cuando un dev se va del equipo, el conocimiento de cómo se resolvieron bugs críticos se pierde. Esta feature lo preserva y lo hace queryable.
+
+### Cómo funciona
+
+Se scrapeaan PRs cerrados/mergeados con labels de bug de repos de GitHub y se guardan en una DB separada:
+
+```
+~/.team-mcp/
+├── mi-api.db          ← contexto del proyecto (como antes)
+├── otro-proyecto.db   ← contexto del proyecto (como antes)
+└── debug-memory.db    ← cross-proyecto, siempre disponible ← NUEVO
+```
+
+La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, `debug-query` siempre accede a la misma base de conocimiento histórica.
+
+### Flujo de uso — equipo real
+
+El caso de uso real es apuntar a los repos propios del equipo. El token se resuelve automáticamente desde `gh` CLI si está autenticado:
+
+```bash
+# Indexar los repos del equipo (privados o públicos)
+team-mcp debug-scrape --repo mi-empresa/backend --repo mi-empresa/payments-api --max-prs 200
+
+# Generar embeddings
+team-mcp debug-embed
+
+# Consultar
+team-mcp debug-query "race condition en worker de pagos"
+
+# Ver cobertura
+team-mcp debug-stats
+```
+
+Con `gh auth login` hecho una vez, no hace falta configurar ningún token — el scraper lo toma solo.
+
+### Demo / testing con repos públicos
+
+Para probar sin acceso a repos privados, usar repos open source con buena cultura de PRs:
+
+```bash
+team-mcp debug-scrape --repo tiangolo/fastapi --repo pallets/flask --max-prs 20
+team-mcp debug-embed
+team-mcp debug-query "dependency injection"
+```
+
+### Nueva tool MCP: `query_debug_history`
+
+Una vez que la DB tiene datos, el LLM puede consultarla directamente:
+
+```
+query_debug_history("race condition en payment worker")
+```
+
+Devuelve los bugs históricos más similares con problema, solución y link al PR original. El LLM recibe contexto concreto en vez de tener que googlear o preguntar al equipo.
+
+### Inyección proactiva — integrada en `get_context`
+
+Cuando el LLM llama `get_context` con un prompt que parece un bug o error (contiene palabras como `exception`, `race condition`, `timeout`, etc.), el servidor **busca automáticamente en debug history** y adjunta los resultados relevantes — sin que el LLM tenga que decidir llamar `query_debug_history` por separado.
+
+```
+Dev: "tengo este traceback: ..."
+LLM llama get_context (como siempre)
+  → servidor detecta patrón de error
+  → busca en debug-memory automáticamente
+  → respuesta incluye contexto del proyecto + bugs históricos similares
+```
+
+`query_debug_history` sigue disponible para búsquedas manuales explícitas.
+
+### Demo
+
+```
+Dev: "tenemos un race condition en el worker de pagos"
+
+LLM (via query_debug_history): "Hace 8 meses tuvimos algo similar en el worker
+de notificaciones. Lo resolvimos agregando distributed locks con Redis.
+Acá está el PR con la implementación completa: github.com/org/repo/pull/234"
+```
+
+Ese conocimiento habría desaparecido cuando el dev original se fue. Ahora está indexado.
+
+---
+
 ## Status
 
 Proyecto en desarrollo. Construido como portfolio para demostrar el uso práctico de embeddings, MCP y tooling para flujos de trabajo de IA.
