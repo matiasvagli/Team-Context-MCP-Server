@@ -465,24 +465,35 @@ Se scrapeaan PRs cerrados/mergeados con labels de bug de repos de GitHub y se gu
 
 La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, `debug-query` siempre accede a la misma base de conocimiento histórica.
 
-### Flujo de uso
+### Flujo de uso — equipo real
+
+El caso de uso real es apuntar a los repos propios del equipo. El token se resuelve automáticamente desde `gh` CLI si está autenticado:
 
 ```bash
-# 1. Scrapear repos (requiere GITHUB_TOKEN para buena rate limit)
-export GITHUB_TOKEN=ghp_...
-team-mcp debug-scrape --repo tiangolo/fastapi --repo pallets/flask --max-prs 50
+# Indexar los repos del equipo (privados o públicos)
+team-mcp debug-scrape --repo mi-empresa/backend --repo mi-empresa/payments-api --max-prs 200
 
-# 2. Generar embeddings para los eventos scrapeados
+# Generar embeddings
 team-mcp debug-embed
 
-# 3. Consultar desde la terminal
-team-mcp debug-query "race condition async worker"
+# Consultar
+team-mcp debug-query "race condition en worker de pagos"
 
-# 4. Ver stats
+# Ver cobertura
 team-mcp debug-stats
 ```
 
-Sin `GITHUB_TOKEN` funciona igual pero con límite de 60 requests/hora de la API pública de GitHub.
+Con `gh auth login` hecho una vez, no hace falta configurar ningún token — el scraper lo toma solo.
+
+### Demo / testing con repos públicos
+
+Para probar sin acceso a repos privados, usar repos open source con buena cultura de PRs:
+
+```bash
+team-mcp debug-scrape --repo tiangolo/fastapi --repo pallets/flask --max-prs 20
+team-mcp debug-embed
+team-mcp debug-query "dependency injection"
+```
 
 ### Nueva tool MCP: `query_debug_history`
 
@@ -494,24 +505,19 @@ query_debug_history("race condition en payment worker")
 
 Devuelve los bugs históricos más similares con problema, solución y link al PR original. El LLM recibe contexto concreto en vez de tener que googlear o preguntar al equipo.
 
-### Limitación actual: modo reactivo
+### Inyección proactiva — integrada en `get_context`
 
-Hoy `query_debug_history` es un tool MCP que el LLM **puede** llamar solo cuando detecta que es relevante (funciona bien en Claude Code / Cursor). Pero no hay inyección automática — si el LLM no decide llamarlo, el contexto no aparece.
-
-### Próximo paso: inyección proactiva
-
-La mejora pendiente es que el servidor detecte patrones de error en el contexto entrante y llame `query_debug_history` automáticamente, sin que el LLM tenga que decidirlo. Algo así:
+Cuando el LLM llama `get_context` con un prompt que parece un bug o error (contiene palabras como `exception`, `race condition`, `timeout`, etc.), el servidor **busca automáticamente en debug history** y adjunta los resultados relevantes — sin que el LLM tenga que decidir llamar `query_debug_history` por separado.
 
 ```
-Dev abre un archivo con un stack trace
-  → servidor detecta el patrón de error
-  → busca en debug-memory antes de responder
-  → inyecta el contexto relevante automáticamente
+Dev: "tengo este traceback: ..."
+LLM llama get_context (como siempre)
+  → servidor detecta patrón de error
+  → busca en debug-memory automáticamente
+  → respuesta incluye contexto del proyecto + bugs históricos similares
 ```
 
-Esto requiere hooks en el servidor MCP para interceptar el contexto antes de cada llamada, lo que es técnicamente posible con FastMCP pero está fuera del scope del MVP.
-
-**Por qué vale la pena:** hoy el LLM necesita "darse cuenta" de que el tool existe y es relevante. Con inyección proactiva, el contexto histórico siempre está disponible sin depender de que el LLM lo decida.
+`query_debug_history` sigue disponible para búsquedas manuales explícitas.
 
 ### Demo
 

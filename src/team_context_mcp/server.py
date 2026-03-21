@@ -75,6 +75,18 @@ def _project_root() -> Path:
         return Path.cwd()
 
 
+_ERROR_PATTERNS = [
+    "error", "exception", "traceback", "bug", "fix", "broken",
+    "fails", "crash", "panic", "fatal", "undefined", "null pointer",
+    "race condition", "timeout", "deadlock",
+]
+
+
+def _looks_like_error(text: str) -> bool:
+    lower = text.lower()
+    return any(p in lower for p in _ERROR_PATTERNS)
+
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 
@@ -83,6 +95,7 @@ def get_context(prompt: str, project: str = "") -> str:
     """
     Returns the most relevant team context for a given prompt.
     Searches skills, team memory, and PR history, ranked by relevance.
+    If the prompt looks like a bug or error, also searches debug history automatically.
 
     Args:
         prompt:  The developer's current task or question.
@@ -101,21 +114,43 @@ def get_context(prompt: str, project: str = "") -> str:
 
     results = [r for r in results if r["score"] >= threshold]
 
-    if not results:
-        return f"No relevant context found for project '{project}' (score below threshold {threshold})."
+    lines = []
 
-    lines = [f"# Team context for: {project}\n"]
-    for r in results:
-        label = f"[{r['type']}]".ljust(10)
-        source = f"  ({r['source_path']})" if r["source_path"] else ""
-        lines.append(f"{label} relevance: {r['semantic_similarity']:.2f}{source}")
-        lines.append("")
-        # Truncate long content to avoid blowing context window
-        content = r["content"]
-        if len(content) > 1500:
-            content = content[:1500] + "\n... [truncated]"
-        lines.append(content)
-        lines.append("\n---")
+    if results:
+        lines.append(f"# Team context for: {project}\n")
+        for r in results:
+            label = f"[{r['type']}]".ljust(10)
+            source = f"  ({r['source_path']})" if r["source_path"] else ""
+            lines.append(f"{label} relevance: {r['semantic_similarity']:.2f}{source}")
+            lines.append("")
+            content = r["content"]
+            if len(content) > 1500:
+                content = content[:1500] + "\n... [truncated]"
+            lines.append(content)
+            lines.append("\n---")
+
+    # Proactive debug history injection — runs automatically when prompt looks like a bug
+    if _looks_like_error(prompt):
+        debug_db = _get_debug_db()
+        if debug_db.total_count() > 0:
+            debug_embedding = Embedder.embed(prompt)
+            debug_results = debug_db.search(debug_embedding, top_k=3)
+            debug_db.close()
+            if debug_results:
+                lines.append("\n# Debug history — similar past bugs\n")
+                for r in debug_results:
+                    lines.append(f"**[{r['repo']}]** {r['title']}  |  score: {r['similarity_score']:.2f}  |  {r['date']}")
+                    lines.append(f"URL: {r['url']}")
+                    if r["problem"]:
+                        lines.append(f"Problem: {r['problem'][:500]}")
+                    if r["solution"]:
+                        lines.append(f"Solution: {r['solution'][:500]}")
+                    lines.append("---")
+        else:
+            debug_db.close()
+
+    if not lines:
+        return f"No relevant context found for project '{project}' (score below threshold {threshold})."
 
     return "\n".join(lines)
 
