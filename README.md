@@ -147,15 +147,23 @@ Los repos del equipo acumulan años de bug fixes documentados en PRs que nadie r
 
 La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, la historia de bugs del equipo siempre está disponible.
 
-Cuando el prompt contiene patrones de error (`exception`, `traceback`, `race condition`, `timeout`, etc.), `get_context` busca automáticamente en debug memory y adjunta los bugs históricos más similares — sin configuración extra.
+#### Cómo funciona
+
+**1. Scraping** — el scraper llama a la API de GitHub y busca PRs cerrados/mergeados con labels de bug (`bug`, `fix`, `hotfix`, `regression`, etc.). De cada PR extrae título, descripción del problema, solución aplicada, archivos modificados, autor y fecha. El token se resuelve automáticamente desde `gh` CLI.
+
+**2. Embeddings** — el texto combinado de título + problema + solución se convierte en un vector de 384 dimensiones usando el mismo modelo `all-MiniLM-L6-v2` del resto del sistema. Se guarda en `debug-memory.db` junto con los metadatos.
+
+**3. Consulta por similitud** — cuando llega una query, se genera su embedding y se buscan los N vectores más cercanos usando `sqlite-vec`. El resultado incluye el bug histórico, la solución aplicada y el link al PR original.
+
+**4. Inyección proactiva** — `get_context` detecta si el prompt contiene patrones de error (`exception`, `traceback`, `race condition`, `timeout`, etc.) y busca automáticamente en debug memory antes de responder. El LLM recibe el contexto del proyecto *y* los bugs históricos similares en una sola llamada.
 
 ```
 Dev: "tenemos una race condition en el worker de pagos"
 
 LLM recibe via get_context:
-  → contexto del proyecto actual
-  → "Hace 8 meses, mismo patrón en el worker de notificaciones.
-     Solución: distributed locks con Redis. PR completo: github.com/org/repo/pull/234"
+  → contexto del proyecto actual (skills, arquitectura)
+  → [debug memory] "Hace 8 meses, mismo patrón en el worker de notificaciones.
+     Solución: distributed locks con Redis. PR: github.com/org/repo/pull/234"
 ```
 
 Ese conocimiento habría desaparecido cuando el dev original se fue. Ahora está indexado.
