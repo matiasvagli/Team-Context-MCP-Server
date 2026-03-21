@@ -449,11 +449,9 @@ El sistema solo clasifica y routea. La generación queda a cargo de tu LLM.
 
 ---
 
-## Debug Memory — historia cross-proyecto de bugs (rama en desarrollo)
+## Debug Memory — historia cross-proyecto de bugs
 
-> **Branch activo:** `feature/debug-memory` — feature en progreso, no mergeada a `main` todavía.
-
-La rama agrega un sistema de memoria histórica de bugs que **vive separado de los proyectos**. El problema que resuelve: cuando un dev se va del equipo, el conocimiento de cómo se resolvieron bugs críticos se pierde. Esta feature lo preserva y lo hace queryable.
+El sistema de memoria histórica de bugs que **vive separado de los proyectos**. El problema que resuelve: cuando un dev se va del equipo, el conocimiento de cómo se resolvieron bugs críticos se pierde. Esta feature lo preserva y lo hace queryable.
 
 ### Cómo funciona
 
