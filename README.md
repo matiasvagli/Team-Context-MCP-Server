@@ -157,16 +157,19 @@ El indexer extrae automáticamente el historial de git — mensaje del commit y 
 
 Cada sesión con el LLM arranca desde cero. Las decisiones tomadas durante la sesión se pierden si no se guardan.
 
-Para evitar esto, usá `add-memory` antes de cerrar:
+Para evitar esto, usá `add-memory` antes de cerrar — pero solo para cosas que **no quedaron en ningún commit ni PR**: decisiones tomadas en una call, en Slack, o durante la sesión misma.
 
 ```bash
-team-mcp add-memory "Decidimos mover auth a un middleware dedicado — ver PR #52"
-team-mcp add-memory "Descartamos JWT stateless por problemas con revocación de tokens"
+# Útil: decisión que no tiene commit asociado
+team-mcp add-memory "Descartamos migrar a microservicios — discutido en call del 2024-03-15, no escala el equipo"
+
+# No hace falta: si hay un commit con buen mensaje, index-prs ya lo levanta
+# team-mcp add-memory "Movimos auth a middleware — ver PR #52"  ← innecesario
 ```
 
 En la próxima sesión, el servidor inyecta esos fragmentos automáticamente cuando el prompt es relevante.
 
-**Tip:** al final de la sesión, pedile al LLM `"dame un resumen de las decisiones que tomamos hoy"` y usá eso como input para `add-memory`.
+**Tip:** al final de la sesión, pedile al LLM `"qué decisiones tomamos hoy que no están en ningún commit"` y usá eso como input para `add-memory`.
 
 ---
 
