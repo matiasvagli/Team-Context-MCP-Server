@@ -6,17 +6,26 @@
 
 ## El problema
 
-Cuando un equipo de devs trabaja con LLMs, el contexto está fragmentado.
+Cuando un equipo de devs trabaja con LLMs, el contexto está fragmentado en tres niveles:
 
-Cada sesión arranca desde cero. Las mismas decisiones de arquitectura se explican una y otra vez. Nadie recuerda qué se intentó y falló el sprint pasado. Todas las tools se cargan siempre, aunque solo 2 sean relevantes.
+**Dentro de una sesión:** cada sesión arranca desde cero. Las mismas decisiones de arquitectura se explican una y otra vez. Las skills del equipo se cargan todas siempre, aunque solo 2 sean relevantes para el task actual.
 
-Tokens desperdiciados, tiempo desperdiciado, y respuestas del LLM que ignoran cómo trabaja tu equipo.
+**Entre proyectos:** cuando alguien resuelve un bug crítico en el backend, ese conocimiento no llega al equipo de frontend aunque el patrón sea idéntico. Cada proyecto aprende las mismas lecciones por separado.
+
+**Cuando alguien se va:** el dev que resolvió la race condition del worker de pagos se fue hace seis meses. Nadie recuerda cómo lo hizo. El próximo que lo encuentre empieza de cero.
+
+Tokens desperdiciados, tiempo desperdiciado, y conocimiento institucional que se evapora.
 
 ## La solución
 
 Un servidor MCP que inyecta silenciosamente el contexto relevante antes de cada llamada al LLM.
 
-El dev escribe su prompt normalmente. El servidor encuentra qué es relevante — skills, decisiones de arquitectura, PRs pasados — y lo agrega al contexto. El LLM responde como si conociera el proyecto.
+El dev escribe su prompt normalmente. El servidor encuentra qué es relevante — skills, decisiones de arquitectura, PRs pasados, bugs históricos — y lo agrega al contexto. El LLM responde como si conociera el proyecto y la historia del equipo.
+
+Resuelve los tres problemas:
+- **Sesión:** indexa skills y decisiones del repo, disponibles en cualquier sesión
+- **Cross-proyecto:** debug memory compartida entre todos los repos del equipo
+- **Rotación de equipo:** el conocimiento queda en la DB, no en la cabeza de una persona
 
 ### Sistema híbrido: DB local + LLM de turno
 
@@ -29,24 +38,22 @@ Tu LLM favorito
       │
       │ "necesito contexto para este prompt"
       ▼
-  MCP Server  ←── lee ──→  ~/.team-mcp/proyecto.db
-      │                     (embeddings locales,
-      │                      sin cloud, sin API key)
+  MCP Server  ←── lee ──→  ~/.team-mcp/proyecto.db      (contexto del proyecto)
+      │          └──────→  ~/.team-mcp/debug-memory.db  (bugs históricos cross-proyecto)
+      │                     (embeddings locales, sin cloud, sin API key)
       │
-      │ "acá tenés los 5 fragmentos más relevantes"
+      │ "acá tenés los fragmentos más relevantes"
       ▼
 Tu LLM favorito genera la respuesta
 ```
 
 **El sistema es agnóstico al LLM.** Funciona igual con Claude Code, Cursor, GitHub Copilot o cualquier cliente que soporte MCP. Cambiar de proveedor de LLM no requiere ningún cambio en el servidor ni en el índice.
 
-**¿Por qué esta separación?** Porque el conocimiento del equipo es tuyo — no debería vivir en la nube ni quedar atado a un proveedor. El MCP Server indexa, rankea y filtra localmente usando el modelo de embeddings CPU-only. El LLM externo solo recibe el texto ya procesado: fragmentos limpios y relevantes. Si mañana cambiás de Claude a GPT-5, o a un modelo local en Ollama, el índice y toda la base de conocimiento siguen intactos. Zero lock-in.
+**¿Por qué esta separación?** Porque el conocimiento del equipo es tuyo — no debería vivir en la nube ni quedar atado a un proveedor. Si mañana cambiás de Claude a GPT-5, o a un modelo local en Ollama, el índice y toda la base de conocimiento siguen intactos. Zero lock-in.
 
 ---
 
 ## Arquitectura: dos componentes
-
-El sistema tiene dos partes que se complementan:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -54,63 +61,39 @@ El sistema tiene dos partes que se complementan:
 │                    (team-mcp <cmd>)                         │
 │                                                             │
 │  • Indexa el repo (skills, team memory, docs, git log)      │
+│  • Scrapea bug fixes de GitHub → debug memory               │
 │  • Guarda memorias de sesión                                │
 │  • Busca en el índice desde la terminal                     │
 │  • Arranca el servidor MCP                                  │
 └──────────────────────────┬──────────────────────────────────┘
                            │ escribe / lee
                            ▼
-                  ~/.team-mcp/{proyecto}.db
-                  (SQLite + sqlite-vec, local)
-                           │
+            ┌──────────────────────────────┐
+            │  ~/.team-mcp/proyecto.db     │  ← por proyecto
+            │  ~/.team-mcp/debug-memory.db │  ← cross-proyecto
+            └──────────────┬───────────────┘
                            │ lee
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      MCP SERVER                             │
 │                  (stdio transport)                          │
 │                                                             │
-│  • get_context(prompt) → devuelve contexto rankeado         │
-│  • list_skills()       → lista lo indexado                  │
-│  • add_memory(content) → guarda memoria desde el LLM        │
+│  • get_context(prompt)        → contexto rankeado           │
+│                                 + debug history si es error │
+│  • query_debug_history(query) → bugs históricos similares   │
+│  • list_skills()              → lista lo indexado           │
+│  • add_memory(content)        → guarda memoria desde el LLM │
 └──────────────────────────┬──────────────────────────────────┘
                            │ MCP protocol
                            ▼
               Claude / Cursor / Copilot / cualquier cliente MCP
 ```
 
-**La CLI** es la herramienta del dev: indexa el repo, guarda decisiones, inspecciona el índice.
+**La CLI** es la herramienta del dev: indexa el repo, scrapea bug history, guarda decisiones, inspecciona el índice.
 
-**El servidor MCP** es lo que el LLM consume: recibe prompts, busca en la DB y devuelve los fragmentos de contexto más relevantes.
+**El servidor MCP** es lo que el LLM consume: recibe prompts, busca en ambas DBs y devuelve los fragmentos más relevantes.
 
 Ambos comparten la misma DB local. No hay servidor externo, no hay cloud, no hay red.
-
-### Flujo de datos
-
-```
-ESCRITURA (CLI)                        LECTURA (MCP Server)
-
- archivo .md / git log                  prompt del dev
-        │                                      │
-        ▼                                      ▼
-  .mcpignore check               Embedder.embed(prompt)
-  (¿ignorar?)                            │
-        │                                ▼
-        ▼                        sqlite-vec MATCH
-  sanitizer.redact()              top_k × 10 candidatos
-  (tokens, keys…)                        │
-        │                                ▼
-        ▼                     score = semantic×0.6
-  Embedder.embed()               + priority×0.25
-  (all-MiniLM-L6-v2)             + recency×0.15
-        │                        - deprecated×0.9
-        ▼                                │
-  VectorDB.insert()                      ▼
-  (documents + embeddings)   score < threshold → vacío
-                                         │
-                                         ▼
-                                  top_k resultados
-                                  → LLM context
-```
 
 ---
 
@@ -151,13 +134,47 @@ El indexer extrae automáticamente el historial de git — mensaje del commit y 
    Archivos: src/cache.py, src/service/user.py
 ```
 
+### Debug Memory — historia cross-proyecto de bugs
+
+Los repos del equipo acumulan años de bug fixes documentados en PRs que nadie recuerda. El scraper los indexa en una DB separada, disponible desde cualquier proyecto:
+
+```
+~/.team-mcp/
+├── mi-api.db          ← contexto específico del proyecto
+├── otro-proyecto.db   ← contexto específico del proyecto
+└── debug-memory.db    ← bug fixes históricos, cross-proyecto
+```
+
+La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, la historia de bugs del equipo siempre está disponible.
+
+Cuando el prompt contiene patrones de error (`exception`, `traceback`, `race condition`, `timeout`, etc.), `get_context` busca automáticamente en debug memory y adjunta los bugs históricos más similares — sin configuración extra.
+
+```
+Dev: "tenemos una race condition en el worker de pagos"
+
+LLM recibe via get_context:
+  → contexto del proyecto actual
+  → "Hace 8 meses, mismo patrón en el worker de notificaciones.
+     Solución: distributed locks con Redis. PR completo: github.com/org/repo/pull/234"
+```
+
+Ese conocimiento habría desaparecido cuando el dev original se fue. Ahora está indexado.
+
+**Setup para el equipo:**
+
+```bash
+# Apuntar a los repos propios (el token se toma de gh CLI automáticamente)
+team-mcp debug-scrape --repo mi-empresa/backend --repo mi-empresa/payments-api --max-prs 200
+team-mcp debug-embed
+```
+
 ---
 
 ## Continuidad entre sesiones
 
 Cada sesión con el LLM arranca desde cero. Las decisiones tomadas durante la sesión se pierden si no se guardan.
 
-Para evitar esto, usá `add-memory` antes de cerrar — pero solo para cosas que **no quedaron en ningún commit ni PR**: decisiones tomadas en una call, en Slack, o durante la sesión misma.
+Usá `add-memory` para cosas que **no quedaron en ningún commit ni PR**: decisiones tomadas en una call, en Slack, o durante la sesión misma.
 
 ```bash
 # Útil: decisión que no tiene commit asociado
@@ -231,8 +248,6 @@ status: deprecated
 
 Al correr `team-mcp init`, el skill se re-indexa con una penalización fuerte de score (`× 0.1`). No desaparece — el LLM puede verlo si lo busca explícitamente — pero nunca va a ganarle a un resultado activo en el ranking normal.
 
-Esto resuelve el problema de que convivían contextos contradictorios (ej. "usar Redis" vs. "usar Valkey") sin que el LLM supiera cuál era vigente.
-
 **Ejemplo real:** el equipo tiene tres convenciones de logging acumuladas a lo largo del tiempo.
 
 ```
@@ -241,7 +256,7 @@ skills/logging-v2.md   → status: deprecated  → score: ~0.09
 skills/logging-v3.md   → (activo)            → score: 0.87
 ```
 
-Cuando el LLM recibe `"add logging to this service"`, el servidor devuelve `logging-v3.md` con score dominante. Las versiones anteriores existen en la DB pero nunca superan el threshold. El equipo no tuvo que borrar ni migrar nada — solo marcar el frontmatter.
+Cuando el LLM recibe `"add logging to this service"`, el servidor devuelve `logging-v3.md` con score dominante. El equipo no tuvo que borrar ni migrar nada — solo marcar el frontmatter.
 
 ---
 
@@ -281,13 +296,14 @@ Los archivos en `priority_files` reciben `priority = 0.95`. El resto usa el defa
 
 ## Soporte multi-proyecto
 
-Una sola DB local (`~/.team-mcp/`), con un archivo por proyecto. El nombre se detecta automáticamente desde `git remote origin`. Sin configuración manual.
+Una sola instalación, múltiples proyectos. Cada proyecto tiene su propia DB detectada automáticamente desde `git remote origin`. La debug memory es compartida entre todos.
 
 ```
 ~/.team-mcp/
-   mi-api.db
-   otro-repo.db
-   frontend.db
+   mi-api.db          ← índice del proyecto mi-api
+   otro-repo.db       ← índice del proyecto otro-repo
+   frontend.db        ← índice del proyecto frontend
+   debug-memory.db    ← bugs históricos, disponible en todos los proyectos
 ```
 
 ---
@@ -319,37 +335,45 @@ team-mcp index-prs
 ## Comandos CLI
 
 ```bash
-# Indexado
+# ── Contexto del proyecto ─────────────────────────────────────────────────────
 team-mcp init                        # Indexa skills, team memory y docs del repo
 team-mcp init --reset                # Borra el índice existente y re-indexa desde cero
 team-mcp index-prs                   # Indexa historial de commits como contexto de PRs
 team-mcp index-prs --limit 100       # Limita la cantidad de commits a indexar
 
-# Memorias de sesión
+# ── Memorias de sesión ────────────────────────────────────────────────────────
 team-mcp add-memory "texto"          # Guarda una decisión o contexto en la DB
 team-mcp add-memory "texto" -p repo  # Especifica el proyecto manualmente
 
-# Inspección
+# ── Inspección ────────────────────────────────────────────────────────────────
 team-mcp search "query"              # Busca en el índice desde la terminal
 team-mcp search "query" --type skill # Filtra por tipo: skill | memory | pr | doc
 team-mcp status                      # Muestra cuántos documentos hay indexados por tipo
 
-# Gestión de proyectos
+# ── Debug Memory (cross-proyecto) ─────────────────────────────────────────────
+team-mcp debug-scrape --repo org/repo --max-prs 200  # Scrapea bug fixes de GitHub
+team-mcp debug-embed                 # Genera embeddings para los eventos scrapeados
+team-mcp debug-query "race condition async worker"   # Busca bugs históricos similares
+team-mcp debug-stats                 # Muestra cobertura: repos indexados y total de eventos
+
+# ── Gestión de proyectos ──────────────────────────────────────────────────────
 team-mcp projects                    # Lista todos los proyectos indexados en ~/.team-mcp/
 team-mcp delete-project <nombre>     # Borra el índice de un proyecto (pide confirmación)
 team-mcp delete-project <nombre> -y  # Borra sin confirmación
 
-# Servidor
+# ── Servidor ──────────────────────────────────────────────────────────────────
 team-mcp serve                       # Arranca el servidor MCP (para el cliente LLM)
 ```
 
 `init` es idempotente: si ya existe un documento con el mismo `source_path`, lo reemplaza. Podés correrlo en cada sesión sin generar duplicados.
 
+Para `debug-scrape`, el token de GitHub se resuelve automáticamente desde `gh` CLI si está autenticado (`gh auth login`). Sin token funciona con límite de 60 requests/hora.
+
 ---
 
 ## Integración con clientes MCP
 
-El repositorio incluye un `.mcp.json` listo para usar. Cualquier cliente compatible (Claude Code, Cursor, Windsurf, Antigravity, etc.) que abra este workspace lo detecta automáticamente.
+El repositorio incluye un `.mcp.json` listo para usar. Cualquier cliente compatible (Claude Code, Cursor, Windsurf, etc.) que abra este workspace lo detecta automáticamente.
 
 ```json
 {
@@ -379,8 +403,6 @@ Cada cliente MCP tiene su propio archivo de configuración global:
 
 El servidor arranca automáticamente en background cuando el cliente lee el `.mcp.json` — no es necesario correr `team-mcp serve` a mano.
 
-Claude va a llamar `get_context` automáticamente cada vez que trabajes en el proyecto.
-
 ---
 
 ## Cómo probarlo sin cliente LLM
@@ -394,19 +416,23 @@ mcp dev src/team_context_mcp/server.py
 
 Abre una UI en `http://localhost:5173` donde podés llamar a las tools manualmente:
 
-- `get_context` → pasale un prompt y ves qué contexto devuelve rankeado
+- `get_context` → pasale un prompt con un error y ves que devuelve contexto del proyecto + bugs históricos
+- `query_debug_history` → búsqueda manual en debug memory
 - `list_skills` → lista lo que hay indexado
 - `add_memory` → agrega una memoria desde la UI
 
-### Probar el indexado de PRs
-
-El indexer usa `git log` local — cualquier commit ya es contexto válido:
+### Probar el flujo completo
 
 ```bash
-git commit --allow-empty -m "fix: removimos Redis del service layer por race conditions en writes concurrentes"
-git commit --allow-empty -m "feat: migración a outbox pattern para eventos internos, descartamos Kafka"
+# 1. Indexar el repo actual
+team-mcp init && team-mcp index-prs
 
-team-mcp index-prs
+# 2. Scrapear bug history (usa gh CLI para el token)
+team-mcp debug-scrape --repo tiangolo/fastapi --max-prs 20
+team-mcp debug-embed
+
+# 3. Probar búsqueda
+team-mcp debug-query "race condition async"
 team-mcp search "por qué sacamos Redis"
 ```
 
@@ -416,9 +442,13 @@ team-mcp search "por qué sacamos Redis"
 
 **SQLite + sqlite-vec** — La alternativa obvia era Chroma o Qdrant. Se descartaron porque requieren un proceso servidor separado, añaden latencia de red y complican el setup en CI. SQLite es un archivo local: latencia cero, zero-config, portable entre máquinas con un `cp`.
 
+**DB separada para debug memory** — Los bug patterns (race condition en async worker, deadlock en transacciones) son relevantes *entre* proyectos, no *dentro* de uno. Mezclarlos con el contexto del proyecto contaminaría el ranking. Una DB global elimina ese problema y permite que el conocimiento fluya entre repos sin configuración.
+
 **all-MiniLM-L6-v2** — Modelos más grandes (e5-large, bge-large) tienen mejor recall pero requieren GPU o 3–4× más tiempo de CPU. `all-MiniLM-L6-v2` corre en 50–80ms por batch en cualquier laptop, produce vectores de 384 dimensiones con precisión suficiente para contexto técnico, y no levanta el ventilador. El tradeoff es correcto para este dominio.
 
-**Ranking híbrido en vez de solo similitud vectorial** — La similitud coseno sola tiene dos problemas conocidos: no distingue documentos populares de documentos relevantes, y trata igual a un doc de hace 3 años que uno de la semana pasada. El componente `recency` evita que decisiones obsoletas dominen el ranking. El componente `priority` permite que `docs/architecture.md` siempre aparezca aunque la similitud semántica no sea la más alta. Sin esto, el LLM recibiría contexto técnicamente correcto pero desactualizado.
+**Ranking híbrido en vez de solo similitud vectorial** — La similitud coseno sola trata igual a un doc de hace 3 años que uno de la semana pasada. El componente `recency` evita que decisiones obsoletas dominen el ranking. El componente `priority` permite que `docs/architecture.md` siempre aparezca aunque la similitud semántica no sea la más alta.
+
+**Token de GitHub desde gh CLI** — En vez de requerir que el usuario configure un `.env`, el scraper detecta automáticamente el token del `gh` CLI si está autenticado. El 100% de los devs que usan GitHub ya tienen `gh` instalado y autenticado.
 
 ---
 
@@ -431,6 +461,7 @@ team-mcp search "por qué sacamos Redis"
 | CLI          | Click + Rich                                             |
 | Protocolo    | MCP estándar (FastMCP) — cualquier cliente compatible    |
 | Git          | GitPython — detección de proyecto y lectura de log       |
+| GitHub API   | urllib (stdlib) — sin dependencias extra para el scraper |
 
 ## Compatibilidad
 
@@ -449,91 +480,6 @@ El sistema solo clasifica y routea. La generación queda a cargo de tu LLM.
 
 ---
 
-## Debug Memory — historia cross-proyecto de bugs
-
-El sistema de memoria histórica de bugs que **vive separado de los proyectos**. El problema que resuelve: cuando un dev se va del equipo, el conocimiento de cómo se resolvieron bugs críticos se pierde. Esta feature lo preserva y lo hace queryable.
-
-### Cómo funciona
-
-Se scrapeaan PRs cerrados/mergeados con labels de bug de repos de GitHub y se guardan en una DB separada:
-
-```
-~/.team-mcp/
-├── mi-api.db          ← contexto del proyecto (como antes)
-├── otro-proyecto.db   ← contexto del proyecto (como antes)
-└── debug-memory.db    ← cross-proyecto, siempre disponible ← NUEVO
-```
-
-La `debug-memory.db` **no depende del proyecto activo**. Sin importar desde qué repo estés trabajando, `debug-query` siempre accede a la misma base de conocimiento histórica.
-
-### Flujo de uso — equipo real
-
-El caso de uso real es apuntar a los repos propios del equipo. El token se resuelve automáticamente desde `gh` CLI si está autenticado:
-
-```bash
-# Indexar los repos del equipo (privados o públicos)
-team-mcp debug-scrape --repo mi-empresa/backend --repo mi-empresa/payments-api --max-prs 200
-
-# Generar embeddings
-team-mcp debug-embed
-
-# Consultar
-team-mcp debug-query "race condition en worker de pagos"
-
-# Ver cobertura
-team-mcp debug-stats
-```
-
-Con `gh auth login` hecho una vez, no hace falta configurar ningún token — el scraper lo toma solo.
-
-### Demo / testing con repos públicos
-
-Para probar sin acceso a repos privados, usar repos open source con buena cultura de PRs:
-
-```bash
-team-mcp debug-scrape --repo tiangolo/fastapi --repo pallets/flask --max-prs 20
-team-mcp debug-embed
-team-mcp debug-query "dependency injection"
-```
-
-### Nueva tool MCP: `query_debug_history`
-
-Una vez que la DB tiene datos, el LLM puede consultarla directamente:
-
-```
-query_debug_history("race condition en payment worker")
-```
-
-Devuelve los bugs históricos más similares con problema, solución y link al PR original. El LLM recibe contexto concreto en vez de tener que googlear o preguntar al equipo.
-
-### Inyección proactiva — integrada en `get_context`
-
-Cuando el LLM llama `get_context` con un prompt que parece un bug o error (contiene palabras como `exception`, `race condition`, `timeout`, etc.), el servidor **busca automáticamente en debug history** y adjunta los resultados relevantes — sin que el LLM tenga que decidir llamar `query_debug_history` por separado.
-
-```
-Dev: "tengo este traceback: ..."
-LLM llama get_context (como siempre)
-  → servidor detecta patrón de error
-  → busca en debug-memory automáticamente
-  → respuesta incluye contexto del proyecto + bugs históricos similares
-```
-
-`query_debug_history` sigue disponible para búsquedas manuales explícitas.
-
-### Demo
-
-```
-Dev: "tenemos un race condition en el worker de pagos"
-
-LLM (via query_debug_history): "Hace 8 meses tuvimos algo similar en el worker
-de notificaciones. Lo resolvimos agregando distributed locks con Redis.
-Acá está el PR con la implementación completa: github.com/org/repo/pull/234"
-```
-
-Ese conocimiento habría desaparecido cuando el dev original se fue. Ahora está indexado.
-
----
-
 ## Status
 
-Proyecto en desarrollo. Construido como portfolio para demostrar el uso práctico de embeddings, MCP y tooling para flujos de trabajo de IA.
+Proyecto en desarrollo activo. Construido como portfolio para demostrar el uso práctico de embeddings, RAG, MCP y tooling para flujos de trabajo de IA en equipos reales.
